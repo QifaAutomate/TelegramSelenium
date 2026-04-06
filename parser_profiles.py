@@ -1,174 +1,171 @@
 import time
 import random
-import pandas as pd
-import re
-
+from openpyxl import load_workbook, Workbook
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 
-
-CHAT_NAME = "WB Партнёры — чат"
-INPUT_FILE = "telegram_raw.xlsx"
-OUTPUT_FILE = "telegram_enriched.xlsx"
-
-MAX_USERS = 15
-
-CHROME_PROFILE_PATH = r"C:\Users\Ирина Сулла\AppData\Local\Google\Chrome\User Data"
-PROFILE_DIR = "Default"
-
-
-df = pd.read_excel(INPUT_FILE)
-
-df = df.sort_values(by="message_count", ascending=False)
-users = df.to_dict("records")[:MAX_USERS]
-
+INPUT_FILE = "telegram_messages.xlsx"
+OUTPUT_FILE = "telegram_profiles_test.xlsx"
 
 options = Options()
-options.add_argument(f"--user-data-dir={CHROME_PROFILE_PATH}")
-options.add_argument(f"--profile-directory={PROFILE_DIR}")
-options.add_argument("--start-maximized")
+options.add_argument(r"user-data-dir=C:\selen2")
 
-driver = webdriver.Chrome(
-    service=Service(ChromeDriverManager().install()),
-    options=options
-)
+driver = webdriver.Chrome(options=options)
+driver.get("https://web.telegram.org/a/")
 
-wait = WebDriverWait(driver, 40)
+input("Открой чат и нажми Enter")
+
+wait = WebDriverWait(driver, 20)
 
 
-def normalize_phone(text):
-    match = re.search(r'\+?\d[\d\s\-\(\)]{10,20}', text)
-    return match.group(0) if match else ""
+def get_chat():
+    return wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, ".messages-container"))
+    )
 
 
-def match_user(msg, target):
-    msg_uid = msg.get_attribute("data-peer-id") or msg.get_attribute("data-user-id")
+def get_messages():
+    return driver.find_elements(
+        By.CSS_SELECTOR,
+        "div[id^='message-']:not([id^='message-group-'])"
+    )
 
-    if str(msg_uid) == str(target["user_id"]):
-        return True
 
+def get_first_message_id():
     try:
-        name = msg.find_element(By.CSS_SELECTOR, ".sender-title").text.lower()
-        if target["full_name"] and target["full_name"].lower() in name:
-            return True
+        msgs = get_messages()
+        return msgs[0].get_attribute("id") if msgs else None
     except:
-        pass
+        return None
 
-    return False
+def scroll_up():
+    for _ in range(15):
+        try:
+            chat = get_chat()
+            current = driver.execute_script(
+                "return arguments[0].scrollTop;", chat
+            )
+            new_pos = max(0, current - 300)
+            driver.execute_script(
+                "arguments[0].scrollTop = arguments[1];",
+                chat, new_pos
+            )
+        except:
+            pass
+        time.sleep(0.4)
+
+
+def find_user_message(user):
+    no_change = 0
+    while True:
+        before = get_first_message_id()
+        for msg in get_messages():
+            try:
+                sender = msg.find_element(By.CSS_SELECTOR, ".sender-title").text.strip()
+                if user.lower() in sender.lower():
+                    return msg
+            except:
+                continue
+        scroll_up()
+        time.sleep(1.5)
+        after = get_first_message_id()
+        if after == before:
+            no_change += 1
+        else:
+            no_change = 0
+        if no_change >= 3:
+            return None
 
 
 def open_profile(msg):
     try:
-        avatar = msg.find_element(By.CSS_SELECTOR, "[data-peer-id]")
-        avatar.click()
-        time.sleep(random.uniform(1.5, 2.5))
+        clickable = msg.find_element(
+            By.CSS_SELECTOR,
+            ".message-title-name-container"
+        )
+        driver.execute_script("arguments[0].click();", clickable)
+
+        wait.until(EC.presence_of_element_located((By.XPATH, "//span")))
+        time.sleep(1.5)
+
         return True
     except:
         return False
 
 
-def extract_profile():
-    username = ""
-    phone = ""
-
+def get_phone():
     try:
-        elems = driver.find_elements(By.XPATH, "//*[contains(text(),'@')]")
-        for el in elems:
-            text = el.text.strip()
-            if text.startswith("@"):
-                username = text
-                break
-
-        elems = driver.find_elements(By.XPATH, "//*[contains(text(), '+')]")
-        for el in elems:
-            phone = normalize_phone(el.text)
-            if phone:
-                break
-
+        elem = driver.find_element(
+            By.XPATH,
+            "//span[contains(text(),'Phone')]/preceding-sibling::span"
+        )
+        return elem.text.strip()
     except:
-        pass
-
-    return username, phone
+        return ""
 
 
 def close_profile():
-    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-    time.sleep(random.uniform(0.5, 1.5))
+    try:
+        driver.find_element(By.TAG_NAME, "body").send_keys("\uE00C")  # ESC
+        time.sleep(1)
+    except:
+        pass
 
 
-driver.get("https://web.telegram.org")
-wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-time.sleep(5)
+wb = load_workbook(INPUT_FILE)
+ws = wb.active
+
+users = []
+
+for row in ws.iter_rows(min_row=2, values_only=True):
+    name = row[0]
+    if name and name not in users:
+        users.append(name)
+
+users = users[:15]
 
 
-chats = driver.find_elements(By.CSS_SELECTOR, ".ListItem.Chat")
-
-target = None
-for chat in chats:
-    if CHAT_NAME in chat.text:
-        target = chat
-        break
-
-if not target:
-    raise Exception("Чат не найден")
-
-target.click()
-time.sleep(3)
+out_wb = Workbook()
+out_ws = out_wb.active
+out_ws.append(["Отправитель", "Телефон"])
 
 
-results = []
+found = 0
 
-for user in users:
-    print(f"\nОбрабатываем {user['user_id']}")
+for i, user in enumerate(users, 1):
+    print(f"\n{i}/{len(users)} -> {user}")
 
-    found = False
+    msg = find_user_message(user)
 
-    for _ in range(30):
+    if not msg:
+        print("Не найден")
+        out_ws.append([user, ""])
+        continue
 
-        messages = driver.find_elements(By.CSS_SELECTOR, "[data-message-id]")
+    if not open_profile(msg):
+        print("Не открылся профиль")
+        out_ws.append([user, ""])
+        continue
 
-        for msg in messages:
-            if match_user(msg, user):
+    phone = get_phone()
 
-                if open_profile(msg):
-                    username, phone = extract_profile()
-                    close_profile()
+    print("Телефон:", phone if phone else "нет")
 
-                    user["username"] = username
-                    user["phone"] = phone
+    if phone:
+        found += 1
 
-                    print(f"username: {username}, phone: {phone}")
+    out_ws.append([user, phone])
 
-                    results.append(user)
+    close_profile()
+    time.sleep(random.uniform(1.5, 3))
 
-                    time.sleep(random.uniform(3, 6))
 
-                    found = True
-                    break
+out_wb.save(OUTPUT_FILE)
 
-        if found:
-            break
-
-        try:
-            container = driver.find_element(By.CSS_SELECTOR, ".messages-container")
-            driver.execute_script("arguments[0].scrollTop = 0;", container)
-        except:
-            driver.execute_script("window.scrollTo(0, 0);")
-
-        time.sleep(random.uniform(2, 4))
-
-    if not found:
-        print("не найден")
-
-df_out = pd.DataFrame(results)
-df_out.to_excel(OUTPUT_FILE, index=False)
-
-print(f"Готово: {OUTPUT_FILE}")
+print("\nГотово")
+print("Найдено телефонов:", found)
 
 driver.quit()
