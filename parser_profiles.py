@@ -1,4 +1,3 @@
-
 import time
 import random
 from openpyxl import load_workbook, Workbook
@@ -7,26 +6,34 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
 
-INPUT_FILE = "telegram_messages.xlsx"
-OUTPUT_FILE = "telegram_profiles_test.xlsx"
+INPUT_FILE = "telegram_messages_clean.xlsx"
+OUTPUT_FILE = "telegram_profiles_test_2.xlsx"
+CHAT_NAME = "WB Партнёры — чат"
 
 options = Options()
-options.add_argument(r"user-data-dir=C:\selen2")
+options.add_argument(r"user-data-dir=C:\papka")
 
 driver = webdriver.Chrome(options=options)
 driver.get("https://web.telegram.org/a/")
 
-input("Открой чат и нажми Enter")
-
 wait = WebDriverWait(driver, 20)
 
-
-def get_chat():
-    return wait.until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, ".messages-container"))
-    )
-
+def open_chat(name):
+    try:
+        search = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "input#telegram-search-input")))
+        search.click()
+        search.send_keys(name)
+        time.sleep(3)
+        result = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".chat-item-clickable.search-result")))
+        result.click()
+        time.sleep(3)
+        print(f"Чат '{name}' открыт")
+        return True
+    except Exception as e:
+        print("Не удалось открыть чат:", e)
+        return False
 
 def get_messages():
     return driver.find_elements(
@@ -34,215 +41,208 @@ def get_messages():
         "div[id^='message-']:not([id^='message-group-'])"
     )
 
-
 def get_first_message_id():
+    messages = get_messages()
+    return messages[0].get_attribute("id") if messages else None
+
+def smart_scroll_up():
     try:
-        msgs = get_messages()
-        return msgs[0].get_attribute("id") if msgs else None
-    except:
-        return None
+        chat = driver.find_element(By.CSS_SELECTOR, ".MessageList.custom-scroll")
+        current = driver.execute_script("return arguments[0].scrollTop;", chat)
+        for _ in range(5):
+            current -= 300
+            if current < 0:
+                current = 0
+            driver.execute_script("arguments[0].scrollTop = arguments[1];", chat, current)
+            time.sleep(0.4)
+        time.sleep(5)
+    except Exception as e:
+        print("Scroll error:", e)
 
-def scroll_up():
-    for _ in range(15):
-        try:
-            chat = get_chat()
-            current = driver.execute_script(
-                "return arguments[0].scrollTop;", chat
-            )
-            new_pos = max(0, current - 300)
-            driver.execute_script(
-                "arguments[0].scrollTop = arguments[1];",
-                chat, new_pos
-            )
-        except:
-            pass
-        time.sleep(0.4)
+def real_click(el):
+    """Настоящий клик через ActionChains — не блокируется Telegram."""
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+    time.sleep(0.5)
+    ActionChains(driver).move_to_element(el).click().perform()
 
+def open_profile(sender_span):
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sender_span)
+        time.sleep(1)
+        real_click(sender_span)
+        print("  Клик по sender-title выполнен")
 
-def find_user_message(user):
-    no_change = 0
-    while True:
-        before = get_first_message_id()
-        for msg in get_messages():
+        time.sleep(4)
+
+        opened = False
+        for attempt in range(4):
             try:
-                sender = msg.find_element(By.CSS_SELECTOR, ".sender-title").text.strip()
-                if user.lower() in sender.lower():
-                    return msg
-            except:
-                continue
-        scroll_up()
+                info_els = driver.find_elements(By.CSS_SELECTOR, ".MiddleHeader .info")
+                if not info_els:
+                    print(f"  Шапка не найдена (попытка {attempt + 1})")
+                    time.sleep(2)
+                    continue
+
+                info_el = info_els[-1]
+                real_click(info_el)
+                print(f"  Клик по шапке чата (попытка {attempt + 1})")
+
+                wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "#RightColumn .close-button")
+                ))
+                opened = True
+                break
+            except Exception as e:
+                print(f"  Панель не открылась: {e}")
+                time.sleep(2)
+
+        if not opened:
+            print("  Панель профиля не открылась")
+            return False
+
         time.sleep(1.5)
-        after = get_first_message_id()
-        if after == before:
-            no_change += 1
-        else:
-            no_change = 0
-        if no_change >= 3:
-            return None
-
-
-def open_profile(msg):
-    try:
-        clickable = msg.find_element(
-            By.CSS_SELECTOR,
-            ".message-title-name-container"
-        )
-        driver.execute_script("arguments[0].click();", clickable)
-
-        wait.until(EC.presence_of_element_located((By.XPATH, "//span")))
-        time.sleep(1.5)
-
         return True
-    except:
+
+    except Exception as e:
+        print("open_profile error:", e)
         return False
 
-
-def get_phone():
+def get_username():
     try:
-        elem = driver.find_element(
-            By.XPATH,
-            "//span[contains(text(),'Phone')]/preceding-sibling::span"
-        )
-        return elem.text.strip()
+        time.sleep(1)
+        items = driver.find_elements(By.CSS_SELECTOR, "div.multiline-item span.title")
+        for item in items:
+            text = item.text.strip()
+            if text.startswith("@"):
+                return text
+        return ""
     except:
         return ""
 
-
-def close_profile():
+def close_profile_and_go_back():
     try:
-        driver.find_element(By.TAG_NAME, "body").send_keys("\uE00C")  # ESC
-        time.sleep(1)
-    except:
-        pass
+        close_btn = wait.until(EC.element_to_be_clickable(
+            (By.CSS_SELECTOR, "#RightColumn .close-button")
+        ))
+        real_click(close_btn)
+        print("  Профиль закрыт")
+        time.sleep(2)
+    except Exception as e:
+        print("  Ошибка закрытия профиля:", e)
 
+    try:
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".chat-item-clickable")))
+        chat_items = driver.find_elements(By.CSS_SELECTOR, ".chat-item-clickable")
+        for item in chat_items:
+            try:
+                title_el = item.find_element(By.CSS_SELECTOR, "h3.fullName")
+                if CHAT_NAME.lower() in title_el.text.lower():
+                    real_click(item)
+                    print("  Вернулись в групповой чат")
+                    time.sleep(3)
+                    break
+            except:
+                continue
+    except Exception as e:
+        print("  Ошибка возврата в чат:", e)
+
+if not open_chat(CHAT_NAME):
+    print("Не удалось открыть чат, завершаем")
+    driver.quit()
+    exit()
 
 wb = load_workbook(INPUT_FILE)
 ws = wb.active
 
-users = []
-
+sender_names = []
 for row in ws.iter_rows(min_row=2, values_only=True):
-    name = row[0]
-    if name and name not in users:
-        users.append(name)
+    cell = row[0]
+    if cell and cell not in sender_names:
+        sender_names.append(cell)
+    if len(sender_names) >= 20:
+        break
 
-users = users[:15]
+results = {name: "" for name in sender_names}
+remaining = set(sender_names)
 
+print(f"Уникальных отправителей: {len(sender_names)}")
+print("Ищем:", remaining)
+
+seen_ids = set()
+no_growth_rounds = 0
+
+for i in range(1000):
+    before_id = get_first_message_id()
+    messages = get_messages()
+
+    print(f"\nРаунд {i}, сообщений: {len(messages)}, осталось: {len(remaining)}")
+
+    for msg in messages:
+        try:
+            msg_id = msg.get_attribute("id")
+            if not msg_id or msg_id in seen_ids:
+                continue
+            seen_ids.add(msg_id)
+
+            sender_spans = msg.find_elements(By.CSS_SELECTOR, "span.sender-title")
+            if not sender_spans:
+                continue
+
+            sender = sender_spans[0].text.strip()
+            if not sender:
+                continue
+
+            matched = None
+            for name in remaining:
+                if name.lower() == sender.lower():
+                    matched = name
+                    break
+
+            if not matched:
+                continue
+
+            print(f"  -> Найден: {matched} (msg_id: {msg_id})")
+
+            if open_profile(sender_spans[0]):
+                username = get_username()
+                print(f"  Username: {username if username else 'нет публичного юзернейма'}")
+                results[matched] = username
+                remaining.discard(matched)
+
+            close_profile_and_go_back()
+            time.sleep(random.uniform(2, 4))
+            no_growth_rounds = 0
+            break
+
+        except Exception as e:
+            print("  msg error:", e)
+            continue
+
+    if not remaining:
+        print("Все пользователи найдены!")
+        break
+
+    smart_scroll_up()
+
+    after_id = get_first_message_id()
+    if after_id == before_id:
+        no_growth_rounds += 1
+        print(f"Нет сдвига: {no_growth_rounds}/20")
+    else:
+        no_growth_rounds = 0
+
+    if no_growth_rounds >= 20:
+        print("Достигнут верх чата")
+        break
 
 out_wb = Workbook()
 out_ws = out_wb.active
-out_ws.append(["Отправитель", "Телефон"])
+out_ws.append(["Отправитель", "Username"])
 
-
-found = 0
-
-for i, user in enumerate(users, 1):
-    print(f"\n{i}/{len(users)} -> {user}")
-
-    msg = find_user_message(user)
-
-    if not msg:
-        print("Не найден")
-        out_ws.append([user, ""])
-        continue
-
-    if not open_profile(msg):
-        print("Не открылся профиль")
-        out_ws.append([user, ""])
-        continue
-
-    phone = get_phone()
-
-    print("Телефон:", phone if phone else "нет")
-
-    if phone:
-        found += 1
-
-    out_ws.append([user, phone])
-
-    close_profile()
-    time.sleep(random.uniform(1.5, 3))
-
+for name in sender_names:
+    out_ws.append([name, results[name]])
 
 out_wb.save(OUTPUT_FILE)
+print(f"\nГотово! Результат: {OUTPUT_FILE}")
 
-print("\nГотово")
-print("Найдено телефонов:", found)
-
-import time
-import random
-from openpyxl import load_workbook
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-
-FILE = "telegram_messages.xlsx"
-
-options = Options()
-options.add_argument(r"user-data-dir=C:\selen")
-driver = webdriver.Chrome(options=options)
-driver.get("https://web.telegram.org/a/")
-input("Enter (открой нужный чат)")
-
-wb = load_workbook(FILE)
-ws = wb.active
-
-if ws.cell(row=1, column=3).value != "Телефон":
-    ws.cell(row=1, column=3).value = "Телефон"
-
-users = []
-rows_map = {}
-
-for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-    sender = row[0]
-    if sender and sender not in users:
-        users.append(sender)
-        rows_map[sender] = i
-
-users = users[:15]
-
-for user in users:
-    print("Пользователь", user)
-
-    messages = driver.find_elements(By.CSS_SELECTOR,"div[id^='message-']:not([id^='message-group-'])")
-    target_msg = None
-    for msg in messages:
-        try:
-            sender = msg.find_element(By.CSS_SELECTOR, ".sender-title").text.strip()
-            if sender == user:
-                target_msg = msg
-                break
-        except:
-            continue
-
-    if not target_msg:
-        print("Не найден в текущем DOM:", user)
-        continue
-
-    try:
-        name_container = target_msg.find_element(By.CSS_SELECTOR,".message-title-name-container.interactive")
-        driver.execute_script("arguments[0].click();", name_container)
-        time.sleep(2)
-    except Exception as e:
-        print("Ошибка открытия профиля:", e)
-        continue
-
-    phone = ""
-
-    try:
-        phone_elem = driver.find_element(By.XPATH,"//span[text()='Phone']/preceding-sibling::span")
-        phone = phone_elem.text.strip()
-    except:
-        phone = ""
-
-    print("Телефон:", phone if phone else "не найден")
-
-    row_index = rows_map[user]
-    ws.cell(row=row_index, column=3).value = phone
-
-    driver.back()
-    time.sleep(random.uniform(3, 6))
-
-wb.save(FILE)
-print("\nГотово. Данные сохранены.")
 driver.quit()
