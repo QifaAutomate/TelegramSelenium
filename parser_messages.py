@@ -7,11 +7,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-OUTPUT_FILE = "telegram_messages_new.xlsx"
-
-wb = Workbook()
-ws = wb.active
-ws.append(["Отправитель", "Все сообщения"])
+OUTPUT_FILE = "files excel/telegram_messages_new.xlsx"
+TARGET_USERS = 200
 
 options = Options()
 options.add_argument(r"user-data-dir=C:\papka")
@@ -39,7 +36,7 @@ def smart_scroll_up():
         current = driver.execute_script("return arguments[0].scrollTop;", chat)
 
         for _ in range(5):
-            current -= 00
+            current -= 300
             if current < 0:
                 current = 0
             driver.execute_script(
@@ -48,11 +45,11 @@ def smart_scroll_up():
             )
             time.sleep(0.4)
 
-        # ждём пока Telegram подгрузит старые сообщения в DOM
         time.sleep(3)
 
     except Exception as e:
         print("Scroll error:", e)
+
 
 time.sleep(2)
 
@@ -61,7 +58,7 @@ last_sender = "Unknown"
 user_messages = {}
 no_growth_rounds = 0
 
-for i in range(100):
+for i in range(350):
     before_id = get_first_message_id()
     messages = get_messages()
     
@@ -103,7 +100,27 @@ for i in range(100):
         except:
             continue
 
+    if len(user_messages) >= TARGET_USERS:
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Отправитель", "Все сообщения"])
+        for sender in sorted(user_messages.keys()):
+            all_text = "\n\n".join(user_messages[sender])
+            ws.append([sender, all_text])
+        wb.save(OUTPUT_FILE)
+        print(f"{TARGET_USERS} уникальных пользователей")
+        break
+
     smart_scroll_up()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Отправитель", "Все сообщения"])
+    for sender in sorted(user_messages.keys()):
+        all_text = "\n\n".join(user_messages[sender])
+        ws.append([sender, all_text])
+    wb.save(OUTPUT_FILE)
+    print(f"Сохранено: {len(user_messages)} пользователей")
 
     after_id = get_first_message_id()
     print(f"before: {before_id} | after: {after_id}")
@@ -118,10 +135,4 @@ for i in range(100):
         print("Достигнут верх")
         break
 
-for sender in sorted(user_messages.keys()):
-    all_text = "\n\n".join(user_messages[sender])
-    ws.append([sender, all_text])
-
-wb.save(OUTPUT_FILE)
-print("Готово:", OUTPUT_FILE)
 driver.quit()

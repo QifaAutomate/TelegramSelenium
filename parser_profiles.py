@@ -8,8 +8,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
-INPUT_FILE = "telegram_messages_clean.xlsx"
-OUTPUT_FILE = "telegram_profiles_test_2.xlsx"
+INPUT_FILE = "files excel/leads.xlsx"
+OUTPUT_FILE = "files excel/LEADS_FULL.xlsx"
 CHAT_NAME = "WB Партнёры — чат"
 
 options = Options()
@@ -159,7 +159,7 @@ for row in ws.iter_rows(min_row=2, values_only=True):
     cell = row[0]
     if cell and cell not in sender_names:
         sender_names.append(cell)
-    if len(sender_names) >= 20:
+    if len(sender_names) >= 50:
         break
 
 results = {name: "" for name in sender_names}
