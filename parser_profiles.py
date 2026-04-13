@@ -68,7 +68,7 @@ def real_click(el):
 def open_profile(sender_span):
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sender_span)
-        time.sleep(1)
+        time.sleep(2)
         real_click(sender_span)
         print("  Клик по sender-title выполнен")
 
@@ -109,12 +109,25 @@ def open_profile(sender_span):
 
 def get_username():
     try:
-        time.sleep(1)
+        time.sleep(2)
         items = driver.find_elements(By.CSS_SELECTOR, "div.multiline-item span.title")
         for item in items:
             text = item.text.strip()
             if text.startswith("@"):
                 return text
+        return ""
+    except:
+        return ""
+
+def get_PhoneNumber():
+    try:
+        time.sleep(2)
+        items = driver.find_elements(By.CSS_SELECTOR, "div.multiline-item")
+        for item in items:
+            subtitle = item.find_element(By.CSS_SELECTOR, "span.subtitle")
+            if subtitle.text.strip() == "Phone":
+                title = item.find_element(By.CSS_SELECTOR, "span.title")
+                return title.text.strip()
         return ""
     except:
         return ""
@@ -162,7 +175,7 @@ for row in ws.iter_rows(min_row=2, values_only=True):
     if len(sender_names) >= 50:
         break
 
-results = {name: "" for name in sender_names}
+results = {name: {"username": "", "phone": ""} for name in sender_names}
 remaining = set(sender_names)
 
 print(f"Уникальных отправителей: {len(sender_names)}")
@@ -205,8 +218,11 @@ for i in range(1000):
 
             if open_profile(sender_spans[0]):
                 username = get_username()
+                phone = get_PhoneNumber()
                 print(f"  Username: {username if username else 'нет публичного юзернейма'}")
-                results[matched] = username
+                print(f"  Phone: {phone if phone else 'нет номера телефона'}")
+                results[matched]["username"] = username
+                results[matched]["phone"] = phone
                 remaining.discard(matched)
 
             close_profile_and_go_back()
@@ -237,10 +253,10 @@ for i in range(1000):
 
 out_wb = Workbook()
 out_ws = out_wb.active
-out_ws.append(["Отправитель", "Username"])
+out_ws.append(["Отправитель", "Username", "PhoneNumber"])
 
 for name in sender_names:
-    out_ws.append([name, results[name]])
+    out_ws.append([name, results[name]["username"], results[name]["phone"]])
 
 out_wb.save(OUTPUT_FILE)
 print(f"\nГотово! Результат: {OUTPUT_FILE}")
