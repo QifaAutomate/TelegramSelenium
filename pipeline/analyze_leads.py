@@ -1,25 +1,24 @@
+# pipeline/analyze_leads.py
 import json
 import time
 import urllib.request
 import urllib.parse
 import ssl
 import os
-import base64
+import uuid
 from dotenv import load_dotenv
-from openpyxl import load_workbook, Workbook
+
+from config.settings import ProjectConfig
+from core.excel import read_xlsx, write_xlsx
 
 load_dotenv()
-
-INPUT_FILE = "files excel/telegram_messages_new.xlsx"
-OUTPUT_FILE = "files excel/leads.xlsx"
 
 GIGACHAT_CREDENTIALS = os.environ["GIGACHAT_CREDENTIALS"]
 GIGACHAT_SCOPE = os.environ.get("GIGACHAT_SCOPE", "GIGACHAT_API_B2B")
 GIGACHAT_MODEL = os.environ.get("GIGACHAT_MODEL", "GigaChat-2-Pro")
 
 
-def get_token():
-    import uuid
+def get_token() -> str:
     data = urllib.parse.urlencode({"scope": GIGACHAT_SCOPE}).encode()
     req = urllib.request.Request(
         "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
@@ -36,11 +35,11 @@ def get_token():
     ctx.verify_mode = ssl.CERT_NONE
     with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
         result = json.loads(resp.read())
-        print("Ответ токена:", result)
+        print("Токен получен")
         return result["access_token"]
 
 
-def analyze_user(token, name, messages):
+def analyze_user(token: str, name: str, messages: str) -> dict:
     prompt = f"""Ты анализируешь сообщения участника Telegram чата WB Партнёры (чат продавцов Wildberries).
 
 Имя: {name}
@@ -81,55 +80,46 @@ def analyze_user(token, name, messages):
         return json.loads(text)
 
 
-wb = load_workbook(INPUT_FILE)
-ws = wb.active
+def analyze_leads(config: ProjectConfig):
+    print("=== Анализ лидов через GigaChat ===")
 
-users = []
-for row in ws.iter_rows(min_row=2, values_only=True):
-    if row[0] and row[1]:
-        users.append((row[0], row[1]))
+    rows = read_xlsx(config.messages_file)
+    users = [(row[0], row[1]) for row in rows if row[0] and row[1]]
+    print(f"Всего пользователей: {len(users)}")
 
-print(f"Всего пользователей: {len(users)}")
+    token = get_token()
+    leads = []
+    token_refresh_counter = 0
 
-token = get_token()
-print("Токен получен!")
+    for i, (name, messages) in enumerate(users):
+        print(f"[{i+1}/{len(users)}] Анализирую: {name}...")
 
-leads = []
-token_refresh_counter = 0
+        if token_refresh_counter >= 50:
+            token = get_token()
+            token_refresh_counter = 0
+            print("Токен обновлён")
 
-for i, (name, messages) in enumerate(users):
-    print(f"[{i+1}/{len(users)}] Анализирую: {name}...")
+        try:
+            result = analyze_user(token, name, messages)
+            if result.get("is_lead"):
+                leads.append({
+                    "name": name,
+                    "reason": result.get("reason", ""),
+                    "score": result.get("score", 0)
+                })
+                print(f"  ЛИД! Оценка: {result['score']} — {result['reason']}")
+            else:
+                print(f"  Не лид")
+            token_refresh_counter += 1
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"  Ошибка: {e}")
+            time.sleep(1)
 
-    if token_refresh_counter >= 50:
-        token = get_token()
-        token_refresh_counter = 0
-        print("Токен обновлён")
+    leads.sort(key=lambda x: x["score"], reverse=True)
 
-    try:
-        result = analyze_user(token, name, messages)
-        if result.get("is_lead"):
-            leads.append({
-                "name": name,
-                "reason": result.get("reason", ""),
-                "score": result.get("score", 0)
-            })
-            print(f"  ЛИД! Оценка: {result['score']} — {result['reason']}")
-        else:
-            print(f"  Не лид")
-        token_refresh_counter += 1
-        time.sleep(0.3)
-    except Exception as e:
-        print(f"  Ошибка: {e}")
-        time.sleep(1)
+    output_rows = [[lead["name"], lead["reason"], lead["score"]] for lead in leads]
+    write_xlsx(config.leads_file, ["Отправитель", "Причина", "Оценка (1-10)"], output_rows)
 
-leads.sort(key=lambda x: x["score"], reverse=True)
-
-out_wb = Workbook()
-out_ws = out_wb.active
-out_ws.append(["Отправитель", "Причина", "Оценка (1-10)"])
-for lead in leads:
-    out_ws.append([lead["name"], lead["reason"], lead["score"]])
-
-out_wb.save(OUTPUT_FILE)
-print(f"\nГотово! Найдено лидов: {len(leads)} из {len(users)}")
-print(f"Результат: {OUTPUT_FILE}")
+    print(f"\nГотово! Найдено лидов: {len(leads)} из {len(users)}")
+    print(f"Результат: {config.leads_file}")
